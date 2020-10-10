@@ -111,3 +111,6 @@ def create_determinsitic_model(network: Network):
     for v in m.getVars():
         if v.x>0:
             print('%s %g' % (v.varName, v.x))
+
+network = create_network()
+create_determinsitic_model(network)
