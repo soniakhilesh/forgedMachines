@@ -108,9 +108,15 @@ def create_determinsitic_model(network: Network):
                     for p in network.get_dest_node_paths(d)), name='PathOpenZipDestination')
     m.update()
     m.optimize()
-    for v in m.getVars():
-        if v.x>0:
-            print('%s %g' % (v.varName, v.x))
+
+    for a in network.get_arcs():
+        if y[a].x>0:
+            print("Trucks on Arc",a.name,"=", y[a].x)
+
+    for z in network.get_zips():
+        for d in network.get_dest_nodes():
+            if u[z, d].x>0:
+                print("Zip ",z.name," connected to ", d.name)
 
 network = create_network()
 create_determinsitic_model(network)
