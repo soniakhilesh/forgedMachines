@@ -15,7 +15,7 @@ class Network:
         self.origin_nodes = []
         self.trans_nodes = []
         self.dest_nodes = []
-        self.paths=[]
+        self.paths = []
 
     def add_node(self, name: str, lon: float, lat: float):
         """
@@ -42,7 +42,7 @@ class Network:
         :param lat:
         :return:
         """
-        zipcode = Zip(name, lon, lat)
+        zipcode = Zip(name, lat, lon)
         self.zips.append(zipcode)
 
     def add_arc(self, origin: Node, dest: Node):
@@ -111,6 +111,19 @@ class Network:
             if node == path.dest:
                 dest_node_paths.append(path)
         return dest_node_paths
+
+    def get_commodity_dest_node_paths(self, commodity, node):
+        """
+        get all apaths for the given commodity which end at given destination node
+        :param commodity:
+        :param node:
+        :return:
+        """
+        paths_to_return = []
+        for path in self.paths:
+            if node == path.dest and path.commodity == commodity:
+                paths_to_return.append(path)
+        return paths_to_return
 
     def get_node(self, name: str):
         """
@@ -190,4 +203,3 @@ class Network:
         :return:
         """
         return self.commodities
-

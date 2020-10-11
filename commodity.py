@@ -11,5 +11,5 @@ class Commodity:
         :param quantity: number of packages
         """
         self.origin_node = origin
-        self.dest = zip
+        self.dest = dest
         self.quantity = quantity
