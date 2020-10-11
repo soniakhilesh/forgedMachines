@@ -80,17 +80,19 @@ def create_determinsitic_model(network: Network):
     # Decision variables
     x = {}
     for commodity in network.get_commodities():
-        x[commodity] = m.addVars(network.get_commodity_paths(commodity), vtype=GRB.BINARY, lb=0, name='CommodityPath')
+        x[commodity] = m.addVars(network.get_commodity_paths(commodity), vtype=GRB.CONTINUOUS, lb=0,ub=1, name='CommodityPath')
         # print(network.get_commodity_paths(commodity))
         # print(x[commodity][network.get_commodity_paths(commodity)[0]])
     y = m.addVars(network.get_arcs(), vtype=GRB.INTEGER, lb=0, name='NumTrucks')
     u = m.addVars(network.get_zips(), network.get_dest_nodes(), vtype=GRB.BINARY, lb=0, name='ZipDestinationMatch')
+    unfulfilled = m.addVars(network.get_commodities(), vtype=GRB.CONTINUOUS, lb=0,ub=1, name='FractionUnfulfilled')
+
     m.update()
     m.modelSense = GRB.MINIMIZE
 
     # constraints
     m.addConstrs(
-        (x[k].sum('*') == 1 for k in network.get_commodities()), name='OnePathPerCommodity')
+        (x[k].sum('*') + unfulfilled[k] == 1 for k in network.get_commodities()), name='CommodityFulfillment')
 
     m.addConstrs(
         (x[k][p] <= y[a] for k in network.get_commodities() for p in network.get_commodity_paths(k)
@@ -99,7 +101,6 @@ def create_determinsitic_model(network: Network):
     for a in network.get_arcs():
         m.addConstr((quicksum(p.commodity.quantity * x[p.commodity][p] for p in network.get_arc_paths(a))
                      <= 1000 * y[a]), name='ArcCapacity{a.name}')
-
     m.addConstrs(
         (u.sum(z, '*') == 1 for z in network.get_zips()), name='DestNodeSelection')
 
@@ -118,5 +119,6 @@ def create_determinsitic_model(network: Network):
             if u[z, d].x>0:
                 print("Zip ",z.name," connected to ", d.name)
 
-network = create_network()
-create_determinsitic_model(network)
+network0 = create_network()
+create_determinsitic_model(network0)
+
