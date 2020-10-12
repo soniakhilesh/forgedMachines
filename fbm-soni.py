@@ -137,7 +137,7 @@ def create_determinsitic_model(network: Network):
          for a in p.arcs), name='PathOpen')
 
     m.addConstrs((quicksum(p.commodity.quantity * x[p.commodity][p] for p in network.get_arc_paths(a))
-                 <= 1000 * y[a] for a in network.get_arcs()), name='ArcCapacity')
+                  <= 1000 * y[a] for a in network.get_arcs()), name='ArcCapacity')
     m.addConstrs(
         (u.sum(z, '*') == 1 for z in network.get_zips()), name='DestNodeSelection')
 
@@ -168,19 +168,20 @@ def create_determinsitic_model(network: Network):
 
     # we probably need parameters from max_load-min_load and distance in order to convert them to cost scale
     # I am using the below parameters randomly
-    lambda1=50
-    lambda2=2
+    lambda1 = 5
+    lambda2 = 0.5
     m.setObjective(quicksum((100 + 2 * a.distance) * y[a] for a in network.get_arcs()) +
                    quicksum(1000 * k.quantity * unfulfilled[k] for k in network.get_commodities()) +
-                   lambda1*(max_load - min_load) +
-                   lambda2*quicksum(r[z] for z in network.get_zips())
+                   lambda1 * (max_load - min_load) +
+                   lambda2 * quicksum(r[z] for z in network.get_zips())
                    )
 
     m.setParam("TimeLimit", 50)
-    m.setParam("MIPGap", 0.02)
+    m.setParam("MIPGap", 0.01)
     m.update()
     m.optimize()
 
+    # print output
     for a in network.get_arcs():
         if y[a].x > 0:
             print("Trucks on Arc", a.name, "=", y[a].x)
@@ -193,6 +194,13 @@ def create_determinsitic_model(network: Network):
     print("Max Load ", max_load.x)
     print("Min Load ", min_load.x)
     print("Missed Load ", sum(unfulfilled[k].x for k in network.get_commodities()))
+    # cost
+    total_cost= sum((100 + 2 * a.distance) * y[a].x for a in network.get_arcs()) + \
+                sum(1000 * k.quantity * unfulfilled[k].x for k in network.get_commodities())
+    tot_packages = sum(k.quantity for k in network.get_commodities())
+    cost_per_package = total_cost/tot_packages
+    print("Cost per package ", cost_per_package)
+    # Katherine: can you calculate distance per package?
 
 
 network0 = create_network()
