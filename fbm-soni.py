@@ -121,7 +121,7 @@ def create_determinsitic_model(network: Network):
     y = m.addVars(network.get_arcs(), vtype=GRB.INTEGER, lb=0, name='NumTrucks')
     u = m.addVars(network.get_zips(), network.get_dest_nodes(), vtype=GRB.BINARY, lb=0, name='ZipDestinationMatch')
     unfulfilled = m.addVars(network.get_commodities(), vtype=GRB.CONTINUOUS, lb=0, ub=1, name='FractionUnfulfilled')
-    r = m.addVars(network.get_commodities(), vtype=GRB.CONTINUOUS, lb=0, name='RemainingDistanceZipToCustomer')
+    r = m.addVars(network.get_zips(), vtype=GRB.CONTINUOUS, lb=0, name='RemainingDistanceZipToCustomer')
     max_load = m.addVar(vtype=GRB.CONTINUOUS, lb=0, name='MaxLoad')
     min_load = m.addVar(vtype=GRB.CONTINUOUS, lb=0, name='MinLoad')
 
@@ -136,9 +136,8 @@ def create_determinsitic_model(network: Network):
         (x[k][p] <= y[a] for k in network.get_commodities() for p in network.get_commodity_paths(k)
          for a in p.arcs), name='PathOpen')
 
-    for a in network.get_arcs():
-        m.addConstr((quicksum(p.commodity.quantity * x[p.commodity][p] for p in network.get_arc_paths(a))
-                     <= 1000 * y[a]), name='ArcCapacity{a.name}')
+    m.addConstrs((quicksum(p.commodity.quantity * x[p.commodity][p] for p in network.get_arc_paths(a))
+                 <= 1000 * y[a] for a in network.get_arcs()), name='ArcCapacity')
     m.addConstrs(
         (u.sum(z, '*') == 1 for z in network.get_zips()), name='DestNodeSelection')
 
@@ -156,19 +155,25 @@ def create_determinsitic_model(network: Network):
 
     # I think next constraint has some ambiguity. What if a part of commodity is fulfilled by TP.
     # Why should we still penalise the distance from destination node? Should we instead define r on z?
+    # I added an alternative to this constraint based on zips instead of commodities
+    # m.addConstrs(
+    #     (r[k] >= dist(k.dest.lat, d.lat, k.dest.lon, d.lon) * u[k.dest, d]
+    #      for k in network.get_commodities() for d in network.get_dest_nodes()),
+    #     name='DistanceDestinationNodeToZip')
+
     m.addConstrs(
-        (r[k] >= dist(k.dest.lat, d.lat, k.dest.lon, d.lon) * u[k.dest, d]
-         for k in network.get_commodities() for d in network.get_dest_nodes()),
+        (r[z] >= dist(z.lat, d.lat, z.lon, d.lon) * u[z, d]
+         for z in network.get_zips() for d in network.get_dest_nodes()),
         name='DistanceDestinationNodeToZip')
 
     # we probably need parameters from max_load-min_load and distance in order to convert them to cost scale
     # I am using the below parameters randomly
-    load_param=50
-    r_param=2
+    lambda1=50
+    lambda2=2
     m.setObjective(quicksum((100 + 2 * a.distance) * y[a] for a in network.get_arcs()) +
                    quicksum(1000 * k.quantity * unfulfilled[k] for k in network.get_commodities()) +
-                   load_param*(max_load - min_load) +
-                   r_param*quicksum(r[k] for k in network.get_commodities())
+                   lambda1*(max_load - min_load) +
+                   lambda2*quicksum(r[z] for z in network.get_zips())
                    )
 
     m.setParam("TimeLimit", 50)
