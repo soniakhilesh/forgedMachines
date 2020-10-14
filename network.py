@@ -55,15 +55,18 @@ class Network:
         arc = Arc(origin, dest)
         self.arcs.append(arc)
 
-    def add_commodity(self, origin: Node, dest: Zip, quantity):
+    def add_commodity(self, origin: Node, dest: Zip, quantity=0, scen_num=-1):
         """
         add commodity to the network
+        :param scen_num: scenario number. -1 means determinsitic problem hence default value
         :param origin:
         :param dest:
-        :param quantity:
+        :param quantity: default 0 if not given
         :return:
         """
-        commodity = Commodity(origin, dest, quantity)
+        commodity = Commodity(origin, dest)
+        commodity.set_scenario(scen_num)
+        commodity.set_quantity(quantity)
         self.commodities.append(commodity)
 
     def add_path(self, arcs, commodity):
@@ -203,3 +206,15 @@ class Network:
         :return:
         """
         return self.commodities
+
+    def get_commodity_by_name(self, name):
+        for comm in self.commodities:
+            if comm.name == name:
+                return comm
+
+    def get_scenario_commodities(self, scen_num):
+        scen_commodities = []
+        for comm in self.commodities:
+            if comm.scenario_num == scen_num:
+                scen_commodities.append(comm)
+        return scen_commodities
