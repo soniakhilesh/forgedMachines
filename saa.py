@@ -5,9 +5,9 @@ import ast
 from itertools import product
 from gurobipy import *
 from network import Network
+from od_demand_generator import demand_generator
+from weightedzips import ZipCoords
 
-
-# do I want a single network with all scenario commodities or a separate network for each scenario?
 def create_stochastic_network():
     """
     no information specific to a scenario: a general network structure
@@ -50,10 +50,11 @@ def create_stochastic_network():
         reader = csv.reader(f)
         zips = list(reader)
     zips = zips[0]
+    zip_coords = ZipCoords()
     for zip_name in zips:
         # drop empty space: took 4 hours to find this bug
         zip_name = zip_name.replace(" ", "")
-        network.add_zip(zip_name, 0.0, 0.0)  # temporarily using 0,0
+        network.add_zip(zip_name, zip_coords.get_lat(zip_name), zip_coords.get_lon(zip_name))  # temporarily using 0,0
 
     # add commodities: for stochastic -add all o-z pairs without setting quantity
     for origin_node in network.get_origin_nodes():
@@ -145,16 +146,17 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
                   for d in network.get_dest_nodes() for s in scenarios), name="MaxLoad")
     # second stage constraints--end
     # add objective
-    lambda1 = 1
+    lambda1 = 20
     lambda2 = 2
     m.setObjective(quicksum((100 + 2 * a.distance) * y[a] for a in network.get_arcs()) +
-                   quicksum(1000 * demand_data[s, k] * unfulfilled[k, s] for k in network.get_commodities() for s in
-                            scenarios)
-                   + quicksum(lambda1 * (max_load[s] - min_load[s]) for s in scenarios) +
+                   (1 / len(scenarios)) * quicksum(
+        1000 * demand_data[s, k] * unfulfilled[k, s] for k in network.get_commodities() for s in
+        scenarios)
+                   + (1 / len(scenarios)) * quicksum(lambda1 * (max_load[s] - min_load[s]) for s in scenarios) +
                    lambda2 * quicksum(r[z] for z in network.get_zips())
                    )
-    # m.setParam("TimeLimit", 50)
-    # m.setParam("MIPGap", 0.01)
+    m.setParam("TimeLimit", 300)
+    m.setParam("MIPGap", 0.05)
     m.update()
 
     """
@@ -181,10 +183,9 @@ def run_saa(network, batch_num, scen_num):
     for i in range(batch_num):
         # generate demand data
         demand_data = {}
-        for s in scenario_list:
-            for k in n.get_commodities():
-                pair = (s, k)
-                demand_data[pair] = 100
+        for k in network.get_commodities():
+            for s in scenario_list:
+                demand_data[(s, k)] = max(int(demand_generator(k.origin_node.name, int(k.dest.name))), 0)
         # build or update model
         if i == 0:
             # build model from scratch
@@ -198,8 +199,9 @@ def run_saa(network, batch_num, scen_num):
                 for k in network.get_commodities():
                     for p in network.get_commodity_paths(k):
                         x_vars[(k, p, s)] = ext_model.getVarByName("CommodityPathScenario[{},{},{}]".format(k, p, s))
-                min_load_con[s] = ext_model.getConstrByName("MinLoad[{}]".format(s))
-                max_load_con[s] = ext_model.getConstrByName("MaxLoad[{}]".format(s))
+                for d in network.get_dest_nodes():
+                    min_load_con[d, s] = ext_model.getConstrByName("MinLoad[{},{}]".format(d, s))
+                    max_load_con[d, s] = ext_model.getConstrByName("MaxLoad[{},{}]".format(d, s))
 
             for zip_name in network.get_zips():
                 for destination_node in network.get_dest_nodes():
@@ -213,13 +215,13 @@ def run_saa(network, batch_num, scen_num):
                 for p in network.get_arc_paths(a):
                     for s in scenario_list:
                         ext_model.chgCoeff(arc_capacity_constraints[a, s], x_vars[p.commodity, p, s],
-                                           demand_data[s, p.k])
+                                           demand_data[s, p.commodity])
             # update load constraints
             for s in scenario_list:
                 for d in network.get_dest_nodes():
                     for k in network.get_commodities():
-                        ext_model.chgCoeff(min_load_con[s], u_vars[k.dest, d], demand_data[s, k])
-                        ext_model.chgCoeff(max_load_con[s], u_vars[k.dest, d], demand_data[s, k])
+                        ext_model.chgCoeff(min_load_con[d, s], u_vars[k.dest, d], -demand_data[s, k])  # coeff are neg
+                        ext_model.chgCoeff(max_load_con[d, s], u_vars[k.dest, d], -demand_data[s, k])
             # update objective
             for k in network.get_commodities():
                 for s in scenario_list:
@@ -228,7 +230,12 @@ def run_saa(network, batch_num, scen_num):
 
         # optimize
         ext_model.optimize()
+        for a in network.get_arcs():
+            temp_var = ext_model.getVarByName("NumTrucks[{}]".format(a))
+            if temp_var.x > 0:
+                print("Trucks on Arc", a.name, "=", temp_var.x)
         # store solution and objective value
 
-n = create_stochastic_network()
-run_saa(n, 2, 2)
+
+network = create_stochastic_network()
+run_saa(network, 1, 4)
