@@ -37,7 +37,7 @@ def create_network():
 
     # Add commodities to network
     # Create set of orders
-    orders = pd.read_csv(datapath + "DeliveryData/DeliveryData0.csv", index_col=0)
+    orders = pd.read_csv(datapath + "DeliveryData/DeliveryData340.csv", index_col=0)
     customers = orders[['customer location', 'customer ZIP', 'quantity']]
     orders = orders.drop(['customer location', 'scenario'], axis=1)
     orders = orders.groupby(by=['origin facility', 'customer ZIP']).agg({'quantity': 'sum'})
@@ -136,7 +136,7 @@ def create_determinsitic_model(network: Network):
         (x[k][p] <= y[a] for k in network.get_commodities() for p in network.get_commodity_paths(k)
          for a in p.arcs), name='PathOpen')
 
-    m.addConstrs((quicksum(p.commodity.quantity * x[p.commodity][p] for p in network.get_arc_paths(a))
+    m.addConstrs((quicksum(p.commodity.get_quantity() * x[p.commodity][p] for p in network.get_arc_paths(a))
                   <= 1000 * y[a] for a in network.get_arcs()), name='ArcCapacity')
     m.addConstrs(
         (u.sum(z, '*') == 1 for z in network.get_zips()), name='DestNodeSelection')
@@ -148,9 +148,9 @@ def create_determinsitic_model(network: Network):
          ), name='PathOpenZipDestination')
 
     # max and min load constraints
-    m.addConstrs((min_load <= sum(u[k.dest, d] * k.quantity for k in network.get_commodities())
+    m.addConstrs((min_load <= sum(u[k.dest, d] * k.get_quantity() for k in network.get_commodities())
                   for d in network.get_dest_nodes()), name="MinLoad")
-    m.addConstrs((max_load >= sum(u[k.dest, d] * k.quantity for k in network.get_commodities())
+    m.addConstrs((max_load >= sum(u[k.dest, d] * k.get_quantity() for k in network.get_commodities())
                   for d in network.get_dest_nodes()), name="MaxLoad")
 
     # I think next constraint has some ambiguity. What if a part of commodity is fulfilled by TP.
@@ -168,10 +168,10 @@ def create_determinsitic_model(network: Network):
 
     # we probably need parameters from max_load-min_load and distance in order to convert them to cost scale
     # I am using the below parameters randomly
-    lambda1 = 5
-    lambda2 = 0.5
+    lambda1 = 1
+    lambda2 = 2
     m.setObjective(quicksum((100 + 2 * a.distance) * y[a] for a in network.get_arcs()) +
-                   quicksum(1000 * k.quantity * unfulfilled[k] for k in network.get_commodities()) +
+                   quicksum(1000 * k.get_quantity() * unfulfilled[k] for k in network.get_commodities()) +
                    lambda1 * (max_load - min_load) +
                    lambda2 * quicksum(r[z] for z in network.get_zips())
                    )
@@ -196,8 +196,8 @@ def create_determinsitic_model(network: Network):
     print("Missed Load ", sum(unfulfilled[k].x for k in network.get_commodities()))
     # cost
     total_cost= sum((100 + 2 * a.distance) * y[a].x for a in network.get_arcs()) + \
-                sum(1000 * k.quantity * unfulfilled[k].x for k in network.get_commodities())
-    tot_packages = sum(k.quantity for k in network.get_commodities())
+                sum(1000 * k.get_quantity() * unfulfilled[k].x for k in network.get_commodities())
+    tot_packages = sum(k.get_quantity() for k in network.get_commodities())
     cost_per_package = total_cost/tot_packages
     print("Cost per package ", cost_per_package)
     # Katherine: can you calculate distance per package?
