@@ -157,7 +157,6 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
     # m.setParam("MIPGap", 0.01)
     m.update()
 
-    # print(m.getConstrByName("CommodityFulfillment[{},{}]".format(k,s)))
     """
     a=network.get_arcs()[0]
     s=1
@@ -167,25 +166,69 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
     Modifying objective
     m.getVarByName("FractionUnfulfilledScenario[{},{}]".format(k,s)).setAttr("obj",1000*demand_data[s,k)
     """
+    return m
 
 
-# def run_saa(network , batch_num, scen_num):
-#     scenario_list = [i for i in range(scen_num)]
-#     for i in range(batch_num):
-#         # generate demand data
-#
-#         if i==0:
-#             # build model from scratch
-#         else:
-#             #change coefficients of model
+def run_saa(network, batch_num, scen_num):
+    scenario_list = [i for i in range(scen_num)]
+    # declare dictionaries for storing necessary objects to update model
+    unfulfilled_vars = {}
+    x_vars = {}
+    u_vars = {}
+    arc_capacity_constraints = {}
+    min_load_con = {}
+    max_load_con = {}
+    for i in range(batch_num):
+        # generate demand data
+        demand_data = {}
+        for s in scenario_list:
+            for k in n.get_commodities():
+                pair = (s, k)
+                demand_data[pair] = 100
+        # build or update model
+        if i == 0:
+            # build model from scratch
+            ext_model = create_extensive_form_model(network, scenario_list, demand_data)
+            # get necessary variables and constraints which need to be updated
+            for s in scenario_list:
+                for k in network.get_commodities():
+                    unfulfilled_vars[(k, s)] = ext_model.getVarByName("FractionUnfulfilledScenario[{},{}]".format(k, s))
+                for a in network.get_arcs():
+                    arc_capacity_constraints[(a, s)] = ext_model.getConstrByName("ArcCapacity[{},{}]".format(a, s))
+                for k in network.get_commodities():
+                    for p in network.get_commodity_paths(k):
+                        x_vars[(k, p, s)] = ext_model.getVarByName("CommodityPathScenario[{},{},{}]".format(k, p, s))
+                min_load_con[s] = ext_model.getConstrByName("MinLoad[{}]".format(s))
+                max_load_con[s] = ext_model.getConstrByName("MaxLoad[{}]".format(s))
 
+            for zip_name in network.get_zips():
+                for destination_node in network.get_dest_nodes():
+                    u_vars[(zip_name, destination_node)] = ext_model.getVarByName("ZipDestinationMatch[{},{}]".format(
+                        zip_name, destination_node))
+
+        else:
+            # change coefficients of model with the new demand data
+            # update arc capacity constraint
+            for a in network.get_arcs():
+                for p in network.get_arc_paths(a):
+                    for s in scenario_list:
+                        ext_model.chgCoeff(arc_capacity_constraints[a, s], x_vars[p.commodity, p, s],
+                                           demand_data[s, p.k])
+            # update load constraints
+            for s in scenario_list:
+                for d in network.get_dest_nodes():
+                    for k in network.get_commodities():
+                        ext_model.chgCoeff(min_load_con[s], u_vars[k.dest, d], demand_data[s, k])
+                        ext_model.chgCoeff(max_load_con[s], u_vars[k.dest, d], demand_data[s, k])
+            # update objective
+            for k in network.get_commodities():
+                for s in scenario_list:
+                    unfulfilled_vars[k, s].setAttr("obj", 1000 * demand_data[s, k])
+            ext_model.update()
+
+        # optimize
+        ext_model.optimize()
+        # store solution and objective value
 
 n = create_stochastic_network()
-# random temporary data
-scenarios = [1, 2]
-demand_data = {}
-for s in scenarios:
-    for k in n.get_commodities():
-        pair = (s, k)
-        demand_data[pair] = 50
-create_extensive_form_model(n, scenarios, demand_data)
+run_saa(n, 2, 2)
