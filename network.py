@@ -4,6 +4,9 @@ from zip import Zip
 from path import Path
 from commodity import Commodity
 
+def dist(lat1, lat2, lon1, lon2):
+    dist =69.5 * abs(lat1 - lat2) + 57.3 * abs(lon1 - lon2)
+    return dist
 
 class Network:
 
@@ -17,7 +20,7 @@ class Network:
         self.dest_nodes = []
         self.paths = []
 
-    def add_node(self, name: str, lon: float, lat: float):
+    def add_node(self, name: str, lat: float, lon: float, ):
         """
         add node to the network
         :param name:
@@ -25,7 +28,7 @@ class Network:
         :param lat:
         :return:
         """
-        node = Node(name, lon, lat)
+        node = Node(name, lat, lon)
         self.nodes.append(node)
         if node.nodetype == "O":
             self.origin_nodes.append(node)
@@ -34,7 +37,7 @@ class Network:
         if node.nodetype == "D":
             self.dest_nodes.append(node)
 
-    def add_zip(self, name: str, lon: float, lat: float):
+    def add_zip(self, name: str, lat: float, lon: float, ):
         """
         add zip to the network
         :param name:
@@ -114,6 +117,16 @@ class Network:
             if node == path.dest:
                 dest_node_paths.append(path)
         return dest_node_paths
+
+    def get_closest_dest_nodes(self, zip_object, num_dest_nodes):
+        distance = {}
+        for d in self.dest_nodes:
+            distance[d] = dist(zip_object.lat, d.lat,zip_object.lon,zip_object.lon)
+        sorted_distance = sorted(distance.items(), key=lambda kv: kv[1])
+        nodes_to_keep = []
+        for i in sorted_distance[:num_dest_nodes]:
+            nodes_to_keep.append(i[0])
+        return nodes_to_keep
 
     def get_dest_node_zip_paths(self, node, zip_code: Zip):
         """

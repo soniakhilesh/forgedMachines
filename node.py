@@ -8,8 +8,8 @@ class Node:
         :param Lat: float
         """
         self.name = name
-        self.lon = Lon
         self.lat = Lat
+        self.lon = Lon
         if name[0] == 'O':
             self.nodetype="O"
         if name[0] == 'T':

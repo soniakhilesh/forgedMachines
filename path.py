@@ -20,3 +20,4 @@ class Path:
                 self.nodes.append(arc.origin)
             if arc.dest not in self.nodes:
                 self.nodes.append(arc.dest)
+

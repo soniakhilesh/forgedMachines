@@ -6,5 +6,5 @@ class Zip:
         :param Lat: float
         """
         self.name = name
-        self.lon = Lon
         self.lat = Lat
+        self.lon = Lon
