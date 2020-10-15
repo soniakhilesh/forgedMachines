@@ -104,7 +104,7 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
     x = m.addVars(tuplelist_comm_path_scenario, vtype=GRB.CONTINUOUS, lb=0, ub=1,
                   name='CommodityPathScenario')
     unfulfilled = m.addVars(network.get_commodities(), scenarios, vtype=GRB.CONTINUOUS,
-                            lb=0, ub=1, name='FractionUnfulfilledScenario')
+                            lb=0, ub=0, name='FractionUnfulfilledScenario')
     r = m.addVars(network.get_zips(), vtype=GRB.CONTINUOUS, lb=0, name='RemainingDistanceZipToCustomer')
     max_load = m.addVars(scenarios, vtype=GRB.CONTINUOUS, lb=0, name='MaxLoad')
     min_load = m.addVars(scenarios, vtype=GRB.CONTINUOUS, lb=0, name='MinLoad')
@@ -134,10 +134,20 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
                            for p in network.get_arc_paths(a)) <= 1000 * y[a] for a in network.get_arcs() for s in
                   scenarios), name='ArcCapacity')
 
-    m.addConstrs(
-        (u[k.dest, d] >= sum(x[k, p, s] for p in network.get_commodity_dest_node_paths(k, d))
-         for k in network.get_commodities() for d in network.get_dest_nodes() for s in scenarios
-         ), name='PathOpenZipDestination')
+    # m.addConstrs(
+    #     (u[k.dest, d] >= sum(x[k, p, s] for p in network.get_commodity_dest_node_paths(k, d))
+    #      for k in network.get_commodities() for d in network.get_dest_nodes() for s in scenarios
+    #      ), name='PathOpenZipDestination')
+
+    # m.addConstrs(
+    #     (u[k.dest, d] >= x[k, p, s]for k in network.get_commodities() for d in network.get_dest_nodes()
+    #      for p in network.get_commodity_dest_node_paths(k, d) for s in scenarios
+    #      ), name='PathOpenZipDestination')
+
+    m.addConstrs(u[z,d]>=x[p.commodity,p,s] for z in network.get_zips() for d in network.get_dest_nodes()
+                 for p in network.get_dest_node_zip_paths(d,z) for s in scenarios)
+
+
 
     # next two constraint needs to be updated in each batch run: update just coefficients
     m.addConstrs((min_load[s] <= sum(u[k.dest, d] * demand_data[s, k] for k in network.get_commodities())
@@ -145,9 +155,9 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
     m.addConstrs((max_load[s] >= sum(u[k.dest, d] * demand_data[s, k] for k in network.get_commodities())
                   for d in network.get_dest_nodes() for s in scenarios), name="MaxLoad")
     # second stage constraints--end
-    # add objective
-    lambda1 = 20
-    lambda2 = 2
+    # add objective  (1,0.01)
+    lambda1 = 2
+    lambda2 = 0.01
     m.setObjective(quicksum((100 + 2 * a.distance) * y[a] for a in network.get_arcs()) +
                    (1 / len(scenarios)) * quicksum(
         1000 * demand_data[s, k] * unfulfilled[k, s] for k in network.get_commodities() for s in
@@ -155,8 +165,46 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
                    + (1 / len(scenarios)) * quicksum(lambda1 * (max_load[s] - min_load[s]) for s in scenarios) +
                    lambda2 * quicksum(r[z] for z in network.get_zips())
                    )
-    m.setParam("TimeLimit", 300)
-    m.setParam("MIPGap", 0.05)
+    m.setParam("TimeLimit", 1000)
+    m.setParam("MIPGap", 0.03)
+
+    # adding some heuristics constraint
+    # ONode3 should definitely connect to TNode 0
+    #o-t
+    # t-1
+    # m.addConstr(y[network.get_arc("ONode3TNode1")] >= 1) # definite
+    # m.addConstr(y[network.get_arc("ONode0TNode1")] >= 1) # definite
+    # m.addConstr(y[network.get_arc("ONode1TNode1")] >= 1) # definite
+    # t-0
+    # m.addConstr(y[network.get_arc("ONode2TNode0")] >= 1) # definite
+    # m.addConstr(y[network.get_arc("ONode0TNode0")] >= 1) # definite
+    # o-d
+    # m.addConstr(y[network.get_arc("ONode0DNode5")] >= 1) # likely
+    # m.addConstr(y[network.get_arc("ONode1DNode6")] >= 1) # likely
+    # m.addConstr(y[network.get_arc("ONode3DNode4")] >= 1) # likely
+    # t-d
+    # m.addConstr(y[network.get_arc("TNode0DNode6")] >= 1) # likely
+    # make zero
+    # o1
+    # m.addConstr(y[network.get_arc("ONode1DNode0")] == 0) # definite
+    # m.addConstr(y[network.get_arc("ONode1DNode2")] == 0) # definite
+    # m.addConstr(y[network.get_arc("ONode1DNode3")] == 0) # definite
+    # # o0
+    # m.addConstr(y[network.get_arc("ONode0DNode0")] == 0) # definite
+    # m.addConstr(y[network.get_arc("ONode0DNode3")] == 0) # definite
+    # m.addConstr(y[network.get_arc("ONode0DNode2")] == 0) # definite
+    # m.addConstr(y[network.get_arc("ONode0DNode1")] == 0) # definite
+    # m.addConstr(y[network.get_arc("ONode0DNode4")] == 0) # definite
+    # # o2
+    # m.addConstr(y[network.get_arc("ONode2DNode5")] == 0) # definite
+    # m.addConstr(y[network.get_arc("ONode2DNode1")] == 0) # definite
+    # m.addConstr(y[network.get_arc("ONode2DNode4")] == 0) # definite
+    # m.addConstr(y[network.get_arc("ONode2DNode6")] == 0) # definite
+    # m.addConstr(y[network.get_arc("ONode2DNode0")] == 0) # definite
+    # # o3
+    # m.addConstr(y[network.get_arc("ONode3DNode0")] == 0) # definite
+    # m.addConstr(y[network.get_arc("ONode3DNode3")] == 0) # definite
+    # m.addConstr(y[network.get_arc("ONode3DNode2")] == 0) # definite
     m.update()
 
     """
@@ -185,7 +233,8 @@ def run_saa(network, batch_num, scen_num):
         demand_data = {}
         for k in network.get_commodities():
             for s in scenario_list:
-                demand_data[(s, k)] = max(int(demand_generator(k.origin_node.name, int(k.dest.name))), 0)
+                temp_demand = max(int(demand_generator(k.origin_node.name, int(k.dest.name))), 0)
+                demand_data[(s, k)] = temp_demand
         # build or update model
         if i == 0:
             # build model from scratch
@@ -230,12 +279,20 @@ def run_saa(network, batch_num, scen_num):
 
         # optimize
         ext_model.optimize()
-        for a in network.get_arcs():
-            temp_var = ext_model.getVarByName("NumTrucks[{}]".format(a))
-            if temp_var.x > 0:
-                print("Trucks on Arc", a.name, "=", temp_var.x)
-        # store solution and objective value
+    for a in network.get_arcs():
+        temp_var = ext_model.getVarByName("NumTrucks[{}]".format(a))
+        if temp_var.x > 0:
+            print("Trucks on Arc", a.name, "=", temp_var.x)
+    for s in scenario_list:
+        print("Min Load ", ext_model.getVarByName("MinLoad[{}]".format(s)).x)
+        print("Max Load ", ext_model.getVarByName("MaxLoad[{}]".format(s)).x)
+        missed = 0
+        for k in network.get_commodities():
+            missed +=k.get_quantity()*ext_model.getVarByName("FractionUnfulfilledScenario[{},{}]".format(k,s)).x
+        print("Unfulfilled demand: ", missed)
+
+    # store solution and objective value
 
 
 network = create_stochastic_network()
-run_saa(network, 1, 4)
+run_saa(network, 1, 7)

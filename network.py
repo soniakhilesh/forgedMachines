@@ -115,6 +115,19 @@ class Network:
                 dest_node_paths.append(path)
         return dest_node_paths
 
+    def get_dest_node_zip_paths(self, node, zip_code: Zip):
+        """
+        get all apaths which end at given destination node
+        :param node:
+        :return:
+        """
+        paths_to_return = []
+        for path in self.paths:
+            if node == path.dest and zip_code == path.commodity.dest:
+                paths_to_return.append(path)
+        return paths_to_return
+
+
     def get_commodity_dest_node_paths(self, commodity, node):
         """
         get all apaths for the given commodity which end at given destination node
