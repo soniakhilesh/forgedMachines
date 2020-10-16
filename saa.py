@@ -92,32 +92,50 @@ def multi_objective(objectives: list, ext_model, y, u, network):
     :return:
     """
     obj_cost, obj_load, obj_distance = objectives[0], objectives[1], objectives[2]
-    ext_model.setParam("TimeLimit", 300)
+    ext_model.setParam("TimeLimit", 5000)
     ext_model.setParam("MIPGap", 0.04)
     solution_values = {}
     epsilon_values = {}
 
     # fix epsilon for load
-    epsilon_values['load'] = 5000  # we can directly change it depending on how much difference we want to allow maybe?
-    # ext_model.addConstr(obj_load<=epsilon_values['load'])
+    epsilon_values['load'] = 2000  # we can directly change it depending on how much difference we want to allow maybe?
+    ext_model.addConstr(obj_load<=epsilon_values['load'])
 
     # solve single objective problems
 
     # solve for cost
-    ext_model.setObjective(obj_cost)
-    ext_model.optimize()
-    solution_values['cost'] = ext_model.getObjective().getValue()
+    # ext_model.setObjectiveN(obj_cost,index=0)
+    ext_model.addConstr(obj_cost<=18000)
+    # ext_model.optimize()
+    # solution_values['cost'] = ext_model.getObjective().getValue()
 
     # solve for distance
-    ext_model.setObjective(obj_distance)
-    # ext_model.addConstr(obj_cost<=50000)
+    ext_model.setObjectiveN(obj_distance,index=0, weight=1)
+    # ext_model.addConstr(obj_distance<=9000) # 12000 feasible
+
+    # Warm start
+    start_trucks = pd.read_csv("warm-start-arc-trucks.csv")
+    start_trucks.set_index(["Arc"],inplace=True)
+
+    for a in network.get_arcs():
+        y[a].start = start_trucks.loc[a.origin.name+"->"+ a.dest.name,'Number of Trucks']
+    # o-z
+    start_oz = pd.read_csv("warm-start-o-z.csv")
+    for index, row in start_oz.iterrows():
+        z = row['ZIP']
+        d = row['Assigned Destination Node']
+        z=str(z)
+        u[network.get_zip(z), network.get_node(d)].start = 1
+
+
+
     ext_model.optimize()
-    solution_values['distance'] = ext_model.getObjective().getValue()
-    epsilon_values['distance'] = 1.05*solution_values['distance'] # cutting 5% slack?
+    # solution_values['distance'] = ext_model.getObjective().getValue()
+    # epsilon_values['distance'] = 1.05*solution_values['distance'] # cutting 5% slack?
 
     # write solution to csvs
-    # write_arcs_to_csv(y,network,"TruckAssignments.csv")
-    # write_zd_to_csv(u,network,"CustomerAssignments.csv")
+    write_arcs_to_csv(y,network,"TruckAssignments.csv")
+    write_zd_to_csv(u,network,"CustomerAssignments.csv")
 
 
 def create_extensive_form_model(network: Network, scenarios: list, demand_data):
@@ -141,8 +159,9 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
     x = m.addVars(tuplelist_comm_path_scenario, vtype=GRB.CONTINUOUS, lb=0, ub=1,
                   name='CommodityPathScenario')
     unfulfilled = m.addVars(network.get_commodities(), scenarios, vtype=GRB.CONTINUOUS,
-                            lb=0, ub=1, name='FractionUnfulfilledScenario')
-    r = m.addVars(network.get_zips(), vtype=GRB.CONTINUOUS, lb=0, name='RemainingDistanceZipToCustomer')
+                            lb=0, ub=0, name='FractionUnfulfilledScenario')
+    # r = m.addVars(network.get_zips(), vtype=GRB.CONTINUOUS, lb=0, name='RemainingDistanceZipToCustomer')
+    r = m.addVars(network.get_commodities(), scenarios, vtype=GRB.CONTINUOUS, lb=0, name='DistanceTraveledByCommodity')
     max_load = m.addVars(scenarios, vtype=GRB.CONTINUOUS, lb=0, name='MaxLoad')
     min_load = m.addVars(scenarios, vtype=GRB.CONTINUOUS, lb=0, name='MinLoad')
     # Decision variables-second stage end
@@ -153,12 +172,18 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
     # first stage constraints--begin
     m.addConstrs(
         (u.sum(z, '*') == 1 for z in network.get_zips()), name='DestNodeSelection')
-    m.addConstrs(
-        (r[z] >= dist(z.lat, d.lat, z.lon, d.lon) * u[z, d]
-         for z in network.get_zips() for d in network.get_dest_nodes()),
-        name='DistanceDestinationNodeToZip')
+    # m.addConstrs(
+    #     (r[z] >= dist(z.lat, d.lat, z.lon, d.lon) * u[z, d]
+    #      for z in network.get_zips() for d in network.get_dest_nodes()),
+    #     name='DistanceDestinationNodeToZip')
     # first stage constraints--end
     # second stage constraints--begin
+    m.addConstrs(
+        (r[k, s] >= quicksum((a.distance * x[k, p, s]) for a in p.arcs) +
+         dist(k.dest.lat, d.lat, k.dest.lon, d.lon) * u[k.dest, d]
+         for k in network.get_commodities() for d in network.get_dest_nodes()
+         for p in network.get_commodity_dest_node_paths(k, d) for s in scenarios),
+        name='DistanceDestinationNodeToZip')
     m.addConstrs(
         (x.sum(k, '*', s) + unfulfilled[(k, s)] == 1 for k in network.get_commodities()
          for s in scenarios), name='CommodityFulfillment')
@@ -197,7 +222,9 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
         1000 * demand_data[s, k] * unfulfilled[k, s] for k in network.get_commodities() for s in
         scenarios)
     obj_load = (1 / len(scenarios)) * quicksum(max_load[s] - min_load[s] for s in scenarios)
-    obj_distance = quicksum(r[z] for z in network.get_zips())
+    # obj_distance = quicksum(r[z] for z in network.get_zips())
+    obj_distance = quicksum((1 / len(scenarios)*r[k, s] for k in network.get_commodities() for s in scenarios))
+
     use_cost = False  # 11322, 12939
     use_load = False  # 100, 2000
     use_distance = False  # 570,690
@@ -229,11 +256,11 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
     # adding some heuristics constraint
 
     # a zip should be connected to one of the closes 3 dest nodes
-    # for z in network.get_zips():
-    #     close_dest_nodes = network.get_closest_dest_nodes(z,4)
-    #     for d in network.get_dest_nodes():
-    #         if d not in close_dest_nodes:
-    #             m.addConstr(u[z,d]==0)
+    for z in network.get_zips():
+        close_dest_nodes = network.get_closest_dest_nodes(z,4)
+        for d in network.get_dest_nodes():
+            if d not in close_dest_nodes:
+                m.addConstr(u[z,d]==0)
 
     m.update()
 
@@ -316,4 +343,4 @@ def run_saa(network, batch_num, scen_num):
 
 network = create_stochastic_network()
 
-run_saa(network, 1, 4)
+run_saa(network, 1, 8)
