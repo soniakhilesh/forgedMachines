@@ -10,6 +10,7 @@ from weightedzips import ZipCoords
 from network import dist
 from output import write_arcs_to_csv, write_zd_to_csv
 
+datapath = "C:/Users/kbada/PycharmProjects/forged-by-machines/"
 
 
 def create_stochastic_network():
@@ -20,7 +21,6 @@ def create_stochastic_network():
     :return:
     """
 
-    datapath = "C:/Users/kbada/PycharmProjects/forged-by-machines/"
     # initialise a network
     network = Network()
 
@@ -84,7 +84,22 @@ def create_stochastic_network():
     return network
 
 
-def multi_objective(objectives: list, ext_model, y, u, network):
+def warmstart_model(network, y, u):
+    # Import solution from mean-value deterministic model
+    start_trucks = pd.read_csv(datapath + "warm-start-arc-trucks.csv")
+    dest_assignment = pd.read_csv(datapath + "warm-start-o-z.csv")
+    # Set y values using trucks dataframe
+    start_trucks.set_index(["Arc"], inplace=True)
+    for a in network.get_arcs():
+        y[a].start = start_trucks.loc[a.origin.name+"->" + a.dest.name, 'Number of Trucks']
+    # Set u values using dest_assignment dataframe
+    for index, row in dest_assignment.iterrows():
+        z = str(row['ZIP'])
+        d = row['Assigned Destination Node']
+        u[network.get_zip(z), network.get_node(d)].start = 1
+
+
+def multi_objective(objectives: list, ext_model):
     """
 
     :param objectives: list of gurobi linear expressions [obj_cost, obj_load, obj_distance]
@@ -92,19 +107,16 @@ def multi_objective(objectives: list, ext_model, y, u, network):
     :return:
     """
     obj_cost, obj_distance, obj_load = objectives[0], objectives[1], objectives[2]
-    obj_weights = np.zeros(3)
     ext_model.setParam("TimeLimit", 300)
     ext_model.setParam("MIPGap", 0.04)
     solution_values = {}
     epsilon_values = np.arange(start=0, stop=0.2, step=0.05)
     tolerance = 0.000001
 
-    # Solve single objective problems
 
     # Solve for cost without any additional constraint
     ext_model.setObjective(obj_cost)
     ext_model.optimize()
-    solution_values['cost'] = {}
     # solution_values['cost'][0] = ext_model.getObjective().getValue()
     best_cost = ext_model.getObjective().getValue()
     # Get corresponding best (most equitable) load just so we have a reference
@@ -113,26 +125,33 @@ def multi_objective(objectives: list, ext_model, y, u, network):
     # ext_model.optimize()
     # best_load_1 = ext_model.getObjective().getValue()
 
+
     # Generating Pareto solution "blanket" for cost as first objective
     for i in epsilon_values:
-        index_i = 0
-        index_j = 0
-        solution_values['distance'][index_i] = {}
+        solution_values[i] = {}
+        # Optimize for distance allowing for some deterioration in cost
         ext_model.setObjective(obj_distance)
-        cost_rhs = (1 + epsilon_values[i]) * best_cost + tolerance
+        cost_rhs = (1 + i) * best_cost + tolerance
         ext_model.addConstr(obj_cost <= cost_rhs)
         ext_model.optimize()
         best_dist = ext_model.getObjective().getValue()
-        solution_values['distance'][index_i] = best_dist
-        ext_model.addConstr(obj_distance <= ext_model.getObjective().getValue() + tolerance)
-        ext_model.setObjective(obj_load)
+        # Store distance obj. value for corresponding epsilon
+        solution_values[i]['distance'] = best_dist
+        # Get best corresponding cost (might be slightly different)
+        ext_model.addConstr(obj_distance <= best_dist + tolerance)
         ext_model.setObjective(obj_cost)
         ext_model.optimize()
         best_cost = ext_model.getObjective().getValue()
-        solution_values['cost'][index_i] = best_cost
-        cost_rhs = (1 + epsilon_values[i]) * best_cost + tolerance
-
-
+        # Store cost obj. value for corresponding epsilon
+        solution_values[i]['cost'] = best_cost
+        # Optimize for load without allowing deterioration
+        cost_rhs = best_cost + tolerance
+        ext_model.addConstr(obj_cost <= cost_rhs)
+        ext_model.setObjective(obj_load)
+        ext_model.optimize()
+        # Store load obj. value for corresponding epsilon
+        solution_values[i]['load'] = ext_model.getObjective().getValue()
+    print(solution_values)
 
         # for j in epsilon_values:
         #
@@ -143,40 +162,19 @@ def multi_objective(objectives: list, ext_model, y, u, network):
         #     best_load = ext_model.getObjective().getValue()
         #     solution_values['load'][index_i] = best_dist
 
-    # Solve for distance without any additional constraint
-    ext_model.setObjective(obj_distance)
-    ext_model.optimize()
-    solution_values['distance'] = {}
-    solution_values['distance'][0] = ext_model.getObjective().getValue()
-    best_distance = ext_model.getObjective().getValue()
-    # Get corresponding best (most equitable) load just so we have a reference
-    ext_model.addConstr(obj_distance <= best_distance + tolerance)
-    ext_model.setObjective(obj_load)
-    ext_model.optimize()
-    best_load_2 = ext_model.getObjective().getValue()
-    best_load = min(best_load_1, best_load_2)
-
-
-
-
 
     # fix epsilon for load
-    epsilon_values['load'] = 5000  # we can directly change it depending on how much difference we want to allow maybe?
+    # epsilon_values['load'] = 5000  # we can directly change it depending on how much difference we want to allow maybe?
     # ext_model.addConstr(obj_load<=epsilon_values['load'])
 
 
 
-
-    # solve for distance
-    ext_model.setObjective(obj_distance)
-    # ext_model.addConstr(obj_cost<=50000)
-    ext_model.optimize()
-    solution_values['distance'] = ext_model.getObjective().getValue()
-    epsilon_values['distance'] = 1.05*solution_values['distance'] # cutting 5% slack?
-
     # write solution to csvs
     # write_arcs_to_csv(y,network,"TruckAssignments.csv")
     # write_zd_to_csv(u,network,"CustomerAssignments.csv")
+
+
+
 
 
 def create_extensive_form_model(network: Network, scenarios: list, demand_data):
@@ -215,7 +213,7 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
     # first stage constraints--end
     # second stage constraints--begin
     m.addConstrs(
-        (r[k, s] >= quicksum((a.distance * x[k, p, s]) for a in p.arcs) +
+        (r[k, s] >= p.distance * x[k, p, s] +
          dist(k.dest.lat, d.lat, k.dest.lon, d.lon) * u[k.dest, d]
          for k in network.get_commodities() for d in network.get_dest_nodes()
          for p in network.get_commodity_dest_node_paths(k, d) for s in scenarios),
@@ -298,6 +296,9 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
 
     m.update()
 
+    # Warmstart model
+    warmstart_model(network, y, u)
+
     """
     a=network.get_arcs()[0]
     s=1
@@ -352,7 +353,7 @@ def run_saa(network, batch_num, scen_num):
                 y_vars[arc] = ext_model.getVarByName("NumTrucks[{}]".format(arc))
 
             # use multi objective stuff
-            multi_objective(objectives, ext_model, y_vars, u_vars, network)
+            multi_objective(objectives, ext_model)
 
         else:
             # change coefficients of model with the new demand data
@@ -377,4 +378,4 @@ def run_saa(network, batch_num, scen_num):
 
 network = create_stochastic_network()
 
-run_saa(network, 1, 4)
+run_saa(network, 1, 1)
