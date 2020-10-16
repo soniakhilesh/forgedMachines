@@ -233,6 +233,13 @@ class Network:
         """
         return self.commodities
 
+    def get_commodity_by_dest_nodes(self, dest_node):
+        comm_to_return = []
+        for k in self.commodities:
+            if k.dest == dest_node:
+                comm_to_return.append(k)
+        return comm_to_return
+
     def get_commodity_by_name(self, name):
         for comm in self.commodities:
             if comm.name == name:

@@ -7,7 +7,10 @@ from gurobipy import *
 from network import Network
 from od_demand_generator import demand_generator
 from weightedzips import ZipCoords
-from network import  dist
+from network import dist
+from output import write_arcs_to_csv, write_zd_to_csv
+
+
 
 def create_stochastic_network():
     """
@@ -81,6 +84,40 @@ def create_stochastic_network():
     return network
 
 
+def multi_objective(objectives: list, ext_model, y, u, network):
+    """
+
+    :param objectives: list of gurobi linear expressions [obj_cost, obj_load, obj_distance]
+    :param ext_model: gurobi model
+    :return:
+    """
+    obj_cost, obj_load, obj_distance = objectives[0], objectives[1], objectives[2]
+    ext_model.setParam("TimeLimit", 300)
+    ext_model.setParam("MIPGap", 0.04)
+    solution_values = {}
+    epsilon_values = {}
+
+    # fix epsilon for load
+    epsilon_values['load'] = 5000  # we can directly change it depending on how much difference we want to allow maybe?
+    # ext_model.addConstr(obj_load<=epsilon_values['load'])
+
+    # solve single objective problems
+
+    # solve for cost
+    ext_model.setObjective(obj_cost)
+    ext_model.optimize()
+    solution_values['cost'] = ext_model.getObjective().getValue()
+
+    # solve for distance
+    ext_model.setObjective(obj_distance)
+    # ext_model.addConstr(obj_cost<=50000)
+    ext_model.optimize()
+    solution_values['distance'] = ext_model.getObjective().getValue()
+    epsilon_values['distance'] = 1.05*solution_values['distance'] # cutting 5% slack?
+
+    # write solution to csvs
+    # write_arcs_to_csv(y,network,"TruckAssignments.csv")
+    # write_zd_to_csv(u,network,"CustomerAssignments.csv")
 
 
 def create_extensive_form_model(network: Network, scenarios: list, demand_data):
@@ -104,7 +141,7 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
     x = m.addVars(tuplelist_comm_path_scenario, vtype=GRB.CONTINUOUS, lb=0, ub=1,
                   name='CommodityPathScenario')
     unfulfilled = m.addVars(network.get_commodities(), scenarios, vtype=GRB.CONTINUOUS,
-                            lb=0, ub=1 , name='FractionUnfulfilledScenario')
+                            lb=0, ub=1, name='FractionUnfulfilledScenario')
     r = m.addVars(network.get_zips(), vtype=GRB.CONTINUOUS, lb=0, name='RemainingDistanceZipToCustomer')
     max_load = m.addVars(scenarios, vtype=GRB.CONTINUOUS, lb=0, name='MaxLoad')
     min_load = m.addVars(scenarios, vtype=GRB.CONTINUOUS, lb=0, name='MinLoad')
@@ -144,92 +181,60 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
     #      for p in network.get_commodity_dest_node_paths(k, d) for s in scenarios
     #      ), name='PathOpenZipDestination')
 
-    m.addConstrs(u[z,d]>=x[p.commodity,p,s] for z in network.get_zips() for d in network.get_dest_nodes()
-                 for p in network.get_dest_node_zip_paths(d,z) for s in scenarios)
-
-
+    m.addConstrs(u[z, d] >= x[p.commodity, p, s] for z in network.get_zips() for d in network.get_dest_nodes()
+                 for p in network.get_dest_node_zip_paths(d, z) for s in scenarios)
 
     # next two constraint needs to be updated in each batch run: update just coefficients
     m.addConstrs((min_load[s] <= sum(u[k.dest, d] * demand_data[s, k] for k in network.get_commodities())
                   for d in network.get_dest_nodes() for s in scenarios), name="MinLoad")
     m.addConstrs((max_load[s] >= sum(u[k.dest, d] * demand_data[s, k] for k in network.get_commodities())
                   for d in network.get_dest_nodes() for s in scenarios), name="MaxLoad")
+
     # second stage constraints--end
-    # (0,0) Terrible for load sharing and trans node: min load 0 and no trans nodes used
-    # 10,5 with no heuristic con: too long to solve
-    # (1,5) with no heuristics: too long to solve
-    # (1,5) with  heuristic on num nodes (4) with 5 scenarios: fast on LP solve, worked well with load distribution
-    # (1,5) with  heuristic on num nodes (3) with 20 scenarios: 15% gap-prettty bad
-    # (2,5) with  heuristic on num nodes (3) with 10 scenarios no unfulfilled vars: not good on load sharing
-    # (5,5) with  heuristic on num nodes (3) with 10 scenarios no unfulfilled vars: not good load sharing
-    # (5,2) with  heuristic on num nodes (3) with 10 scenarios no unfulfilled vars: bot good load sharing
-    # (1,10) with  heuristic on num nodes (3) with 10 scenarios no unfulfilled vars: not good load sharing
-    # (50,0.01) with  heuristic on num nodes (3) with 5 scenarios no unfulfilled vars: not good load sharing
-    # (1000,0.01) with  heuristic on num nodes (3) with 5 scenarios no unfulfilled vars: bad at load sharing
-    # (1,1000) with  heuristic on num nodes (3) with 5 scenarios no unfulfilled vars: bad at load sharing
-    # (10,10) with  heuristic on num nodes (3) with 5 scenarios no unfulfilled vars:
 
-
-    lambda1 = 10
-    lambda2 = 0
-    m.setObjective(quicksum((100 + 2 * a.distance) * y[a] for a in network.get_arcs()) +
-                   (1 / len(scenarios)) * quicksum(
+    obj_cost = LinExpr(quicksum((100 + 2 * a.distance) * y[a] for a in network.get_arcs())) + (
+                1 / len(scenarios)) * quicksum(
         1000 * demand_data[s, k] * unfulfilled[k, s] for k in network.get_commodities() for s in
         scenarios)
-                   + lambda1 *(1 / len(scenarios)) * quicksum(max_load[s] - min_load[s] for s in scenarios) +
-                   lambda2 * quicksum(r[z] for z in network.get_zips())
-                   )
-    m.setParam("TimeLimit", 200)
-    m.setParam("MIPGap", 0.04)
+    obj_load = (1 / len(scenarios)) * quicksum(max_load[s] - min_load[s] for s in scenarios)
+    obj_distance = quicksum(r[z] for z in network.get_zips())
+    use_cost = False  # 11322, 12939
+    use_load = False  # 100, 2000
+    use_distance = False  # 570,690
+    # if use_cost:
+    #     m.setObjective(obj_cost)
+    #     m.addConstr(obj_load<=2500)
+    #     m.addConstr(obj_distance<=700)
+    # elif use_load:
+    #     m.setObjective(obj_load)
+    #     m.addConstr(obj_cost<=2*11322)
+    #     m.addConstr(obj_distance<=690)
+    # elif use_distance:
+    #     m.setObjective(obj_distance)
+    #     m.addConstr(obj_cost<=1.2*12939) #2*11322
+    #     m.addConstr(obj_load<=2000)
+    # else:
+    #     print("No objective specified")
+
+    # m.setObjective(quicksum((100 + 2 * a.distance) * y[a] for a in network.get_arcs()) +
+    #                (1 / len(scenarios)) * quicksum(
+    #     1000 * demand_data[s, k] * unfulfilled[k, s] for k in network.get_commodities() for s in
+    #     scenarios)
+    #                + (1 / len(scenarios)) * quicksum(max_load[s] - min_load[s] for s in scenarios) +
+    #                 quicksum(r[z] for z in network.get_zips())
+    #                )
+    # m.setParam("TimeLimit", 400)
+    # m.setParam("MIPGap", 0.04)
 
     # adding some heuristics constraint
-    # ONode3 should definitely connect to TNode 0
-    #o-t
-    # t-1
-    # m.addConstr(y[network.get_arc("ONode3TNode1")] >= 1) # definite
-    # m.addConstr(y[network.get_arc("ONode0TNode1")] >= 1) # definite
-    # m.addConstr(y[network.get_arc("ONode1TNode1")] >= 1) # definite
-    # t-0
-    # m.addConstr(y[network.get_arc("ONode2TNode0")] >= 1) # definite
-    # m.addConstr(y[network.get_arc("ONode0TNode0")] >= 1) # definite
-    # o-d
-    # m.addConstr(y[network.get_arc("ONode0DNode5")] >= 1) # likely
-    # m.addConstr(y[network.get_arc("ONode1DNode6")] >= 1) # likely
-    # m.addConstr(y[network.get_arc("ONode3DNode4")] >= 1) # likely
-    # t-d
-    # m.addConstr(y[network.get_arc("TNode0DNode6")] >= 1) # likely
-    # make zero
-    # o1
-    # m.addConstr(y[network.get_arc("ONode1DNode0")] == 0) # definite
-    # m.addConstr(y[network.get_arc("ONode1DNode2")] == 0) # definite
-    # m.addConstr(y[network.get_arc("ONode1DNode3")] == 0) # definite
-    # # o0
-    # m.addConstr(y[network.get_arc("ONode0DNode0")] == 0) # definite
-    # m.addConstr(y[network.get_arc("ONode0DNode3")] == 0) # definite
-    # m.addConstr(y[network.get_arc("ONode0DNode2")] == 0) # definite
-    # m.addConstr(y[network.get_arc("ONode0DNode1")] == 0) # definite
-    # m.addConstr(y[network.get_arc("ONode0DNode4")] == 0) # definite
-    # # o2
-    # m.addConstr(y[network.get_arc("ONode2DNode5")] == 0) # definite
-    # m.addConstr(y[network.get_arc("ONode2DNode1")] == 0) # definite
-    # m.addConstr(y[network.get_arc("ONode2DNode4")] == 0) # definite
-    # m.addConstr(y[network.get_arc("ONode2DNode6")] == 0) # definite
-    # m.addConstr(y[network.get_arc("ONode2DNode0")] == 0) # definite
-    # # o3
-    # m.addConstr(y[network.get_arc("ONode3DNode0")] == 0) # definite
-    # m.addConstr(y[network.get_arc("ONode3DNode3")] == 0) # definite
-    # m.addConstr(y[network.get_arc("ONode3DNode2")] == 0) # definite
 
     # a zip should be connected to one of the closes 3 dest nodes
-    for z in network.get_zips():
-        close_dest_nodes = network.get_closest_dest_nodes(z,4)
-        for d in network.get_dest_nodes():
-            if d not in close_dest_nodes:
-                m.addConstr(u[z,d]==0)
-    # # temporary testing-disable all direct arcs
-    # for arc in network.get_arcs():
-    #     if arc.origin in network.get_origin_nodes() and arc.dest in network.get_dest_nodes():
-    #         m.addConstr(y[arc]==0)
+    # for z in network.get_zips():
+    #     close_dest_nodes = network.get_closest_dest_nodes(z,4)
+    #     for d in network.get_dest_nodes():
+    #         if d not in close_dest_nodes:
+    #             m.addConstr(u[z,d]==0)
+
     m.update()
 
     """
@@ -241,7 +246,7 @@ def create_extensive_form_model(network: Network, scenarios: list, demand_data):
     Modifying objective
     m.getVarByName("FractionUnfulfilledScenario[{},{}]".format(k,s)).setAttr("obj",1000*demand_data[s,k)
     """
-    return m
+    return [obj_cost, obj_load, obj_distance], m
 
 
 def run_saa(network, batch_num, scen_num):
@@ -250,6 +255,7 @@ def run_saa(network, batch_num, scen_num):
     unfulfilled_vars = {}
     x_vars = {}
     u_vars = {}
+    y_vars={}
     arc_capacity_constraints = {}
     min_load_con = {}
     max_load_con = {}
@@ -263,7 +269,7 @@ def run_saa(network, batch_num, scen_num):
         # build or update model
         if i == 0:
             # build model from scratch
-            ext_model = create_extensive_form_model(network, scenario_list, demand_data)
+            objectives, ext_model = create_extensive_form_model(network, scenario_list, demand_data)
             # get necessary variables and constraints which need to be updated
             for s in scenario_list:
                 for k in network.get_commodities():
@@ -281,6 +287,11 @@ def run_saa(network, batch_num, scen_num):
                 for destination_node in network.get_dest_nodes():
                     u_vars[(zip_name, destination_node)] = ext_model.getVarByName("ZipDestinationMatch[{},{}]".format(
                         zip_name, destination_node))
+            for arc in network.get_arcs():
+                y_vars[arc] = ext_model.getVarByName("NumTrucks[{}]".format(arc))
+
+            # use multi objective stuff
+            multi_objective(objectives, ext_model,y_vars,u_vars, network)
 
         else:
             # change coefficients of model with the new demand data
@@ -302,30 +313,7 @@ def run_saa(network, batch_num, scen_num):
                     unfulfilled_vars[k, s].setAttr("obj", 1000 * demand_data[s, k])
             ext_model.update()
 
-        # optimize
-        ext_model.optimize()
-        for a in network.get_arcs():
-            temp_var = ext_model.getVarByName("NumTrucks[{}]".format(a))
-            if temp_var.x > 0:
-                print("Trucks on Arc", a.name, "=", temp_var.x, "Arc length= ", a.distance)
-        for s in scenario_list:
-            print("Min Load ", ext_model.getVarByName("MinLoad[{}]".format(s)).x)
-            print("Max Load ", ext_model.getVarByName("MaxLoad[{}]".format(s)).x)
-            missed = 0
-            for k in network.get_commodities():
-                missed +=k.get_quantity()*ext_model.getVarByName("FractionUnfulfilledScenario[{},{}]".format(k,s)).x
-            print("Unfulfilled demand: ", missed)
-        for z in network.get_zips():
-            for d in network.get_dest_nodes():
-                if u_vars[z, d].x > 0:
-                    print("Zip ", z.name, " connected to ", d.name, "distance= ", dist(z.lat,d.lat,z.lon,d.lon))
-    # store solution and objective value
-
 
 network = create_stochastic_network()
-# for arc in network.get_arcs():
-#     # print(arc.name, arc.distance)
-#     for path in network.get_arc_paths(arc):
-#         print(path.origin.name,path.dest.name)
 
-run_saa(network, 1, 5)
+run_saa(network, 1, 4)
