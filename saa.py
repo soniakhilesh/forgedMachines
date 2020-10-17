@@ -92,20 +92,20 @@ def multi_objective(objectives: list, ext_model, y, u, network):
     :return:
     """
     obj_cost, obj_load, obj_distance = objectives[0], objectives[1], objectives[2]
-    ext_model.setParam("TimeLimit", 5000)
-    ext_model.setParam("MIPGap", 0.04)
+    ext_model.setParam("TimeLimit", 3000)
+    ext_model.setParam("MIPGap", 0.20)
     solution_values = {}
     epsilon_values = {}
 
     # fix epsilon for load
-    epsilon_values['load'] = 2000  # we can directly change it depending on how much difference we want to allow maybe?
+    epsilon_values['load'] = 1000  # we can directly change it depending on how much difference we want to allow maybe?
     ext_model.addConstr(obj_load<=epsilon_values['load'])
 
     # solve single objective problems
 
     # solve for cost
     # ext_model.setObjectiveN(obj_cost,index=0)
-    ext_model.addConstr(obj_cost<=18000)
+    ext_model.addConstr(obj_cost<=14000)
     # ext_model.optimize()
     # solution_values['cost'] = ext_model.getObjective().getValue()
 
@@ -114,13 +114,13 @@ def multi_objective(objectives: list, ext_model, y, u, network):
     # ext_model.addConstr(obj_distance<=9000) # 12000 feasible
 
     # Warm start
-    start_trucks = pd.read_csv("warm-start-arc-trucks.csv")
+    start_trucks = pd.read_csv("warm-start-arc-trucks-best.csv")
     start_trucks.set_index(["Arc"],inplace=True)
 
     for a in network.get_arcs():
         y[a].start = start_trucks.loc[a.origin.name+"->"+ a.dest.name,'Number of Trucks']
     # o-z
-    start_oz = pd.read_csv("warm-start-o-z.csv")
+    start_oz = pd.read_csv("warm-start-o-z-best.csv")
     for index, row in start_oz.iterrows():
         z = row['ZIP']
         d = row['Assigned Destination Node']
@@ -343,4 +343,4 @@ def run_saa(network, batch_num, scen_num):
 
 network = create_stochastic_network()
 
-run_saa(network, 1, 8)
+run_saa(network, 1, 10)
