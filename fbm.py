@@ -132,17 +132,17 @@ m.modelSense = GRB.MINIMIZE
 m.update()
 
 # Constraints
-m.addConstrs(
-    (x.sum(k, '*') == 1 for k in K), name='OnePathPerCommodity')
-
-m.addConstrs(
-    (x[k, p] <= y[a] for k in K for p in P[k] for a in A[p]), name='PathOpen')
-
-m.addConstrs(
-    (quicksum(q[k]*x[k, p] for k in K for p in P[k]: a in p) <= 1000*y[a] for a in A), name='ArcCapacity')
-
-m.addConstrs(
-    (u.sum(z, '*') == 1 for z in Z), name='DestNodeSelection')
-
-m.addConstrs(
-    (u[z, d] >= x[p] for z in Z for d in D for p in P: end[p] == d), name='PathOpenZipDestination')
+# m.addConstrs(
+#     (x.sum(k, '*') == 1 for k in K), name='OnePathPerCommodity')
+#
+# m.addConstrs(
+#     (x[k, p] <= y[a] for k in K for p in P[k] for a in A[p]), name='PathOpen')
+#
+# m.addConstrs(
+#     (quicksum(q[k]*x[k, p] for k in K for p in P[k]: a in p) <= 1000*y[a] for a in A), name='ArcCapacity')
+#
+# m.addConstrs(
+#     (u.sum(z, '*') == 1 for z in Z), name='DestNodeSelection')
+#
+# m.addConstrs(
+#     (u[z, d] >= x[p] for z in Z for d in D for p in P: end[p] == d), name='PathOpenZipDestination')
